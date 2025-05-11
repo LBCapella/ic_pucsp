@@ -1,0 +1,84 @@
+version: "3.8"
+
+services:
+  # FIWARE Orion Context Broker
+  orion:
+    image: fiware/orion:latest
+    container_name: orion
+    ports:
+      - "1026:1026"
+    command: [ "-dbURI", "mongodb://mongo:27017" ]
+    depends_on:
+      - mongo
+
+  # MongoDB: banco de dados utilizado pelo Orion para persistência interna
+  mongo:
+    image: mongo:4.4
+    container_name: mongo
+    ports:
+      - "27017:27017"
+
+  # FIWARE Cygnus: responsável por captar notificações do Orion e encaminhar para o PostgreSQL
+  cygnus:
+    image: fiware/cygnus-ngsi:latest
+    # build: ./cygnus_custom
+    container_name: cygnus
+    ports:
+      - "5055:5055"
+    environment:
+      - CYGNUS_POSTGRESQL_HOST=postgres
+      - CYGNUS_POSTGRESQL_PORT=5432
+      - CYGNUS_POSTGRESQL_USER=fiware
+      - CYGNUS_POSTGRESQL_PASS=fiware
+      - CYGNUS_POSTGRESQL_DATABASE=fiware
+      - CYGNUS_POSTGRESQL_ENABLE_CACHE=true
+      - CYGNUS_SERVICE_PORT=5055
+      - CYGNUS_LOG_LEVEL=DEBUG
+      - CYGNUS_AGENT_NAME=cygnus-ngsi
+      - CYGNUS_POSTGRESQL_ATTR_PERSISTENCE=row
+      - CYGNUS_POSTGRESQL_DATA_MODEL=dm-by-entity
+      # # Variáveis adicionais para o script de entrada do Cygnus
+      # - CYGNUS_POSTGRESQL_USER=fiware
+      # - CYGNUS_POSTGRESQL_PASS=fiware
+    depends_on:
+      - orion
+      - postgres
+
+  # PostgreSQL: banco de dados onde o Cygnus armazenará os dados oriundos do Orion
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=fiware
+      - POSTGRES_PASSWORD=fiware
+      - POSTGRES_DB=fiware
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Grafana: ferramenta para visualização e análise dos dados armazenados no PostgreSQL
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - postgres
+
+  # Serviço Python: executa o script que carrega os dados do arquivo local e envia para o Orion
+  python_script:
+    build: ./python_app
+    container_name: python_script
+    environment:
+      - ORION_URL=http://orion:1026/v2/entities
+      - ORION_SUBSCRIPTION_URL=http://orion:1026/v2/subscriptions
+    depends_on:
+      - orion
+      - cygnus
+    command: ["python", "load_to_orion.py"]
+
+volumes:
+  postgres_data:
