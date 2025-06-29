@@ -10,19 +10,37 @@ sys.stdout.reconfigure(line_buffering=True)
 
 print("Script iniciado!")
 
-# Configurações
-DATA_FILE = "weather_data.json"  # Arquivo no diretório atual
+# --- Configurações ---
+DATA_FILE = "weather_data.json"  # Como solicitado, assumindo que o arquivo está acessível
 ORION_URL = os.environ.get('ORION_URL', 'http://orion:1026/v2/entities')
+ORION_VERSION_URL = 'http://orion:1026/version' # Endpoint para checagem de saúde
 ORION_SUBSCRIPTION_URL = os.environ.get('ORION_SUBSCRIPTION_URL', 'http://orion:1026/v2/subscriptions')
-ENTITY_ID = "weather:SaoPaulo"  # ID da entidade no Orion
-MAX_RETRIES = 10
+ENTITY_ID = "weather:SaoPaulo"
+MAX_RETRIES = 20
 RETRY_INTERVAL = 10  # segundos
 
-print(f"Configurações carregadas: DATA_FILE={DATA_FILE}, ORION_URL={ORION_URL}")
+# --- NOVA FUNÇÃO DE ESPERA ---
+def wait_for_orion():
+    """Aguarda ativamente o Orion ficar online e pronto para receber requisições."""
+    print(f"Aguardando o Orion Context Broker em {ORION_VERSION_URL}...")
+    for i in range(MAX_RETRIES):
+        try:
+            response = requests.get(ORION_VERSION_URL, timeout=5)
+            if response.status_code == 200:
+                print(f"Orion está online! Versão: {response.json().get('orion', {}).get('version')}")
+                return True
+        except requests.exceptions.RequestException:
+            pass # Ignora erros de conexão enquanto espera
+        
+        print(f"Tentativa {i+1}/{MAX_RETRIES}: Orion ainda não está disponível. Aguardando {RETRY_INTERVAL}s...")
+        time.sleep(RETRY_INTERVAL)
+        
+    print("ERRO: O Orion não ficou disponível a tempo. Encerrando script.")
+    return False
 
-# Função para criar a subscription no Orion
 def create_subscription():
-    print("Iniciando criação de subscription...")
+    """Cria a subscrição para o Cygnus se ela não existir."""
+    print("Verificando subscrição para o Cygnus...")
     subscription_payload = {
         "description": "Subscription para enviar dados ao Cygnus",
         "subject": {
@@ -31,160 +49,80 @@ def create_subscription():
         },
         "notification": {
             "http": {"url": "http://cygnus:5055/notify"},
-            "attrs": ["forecast"]
+            "attrsFormat": "normalized"
         },
         "expires": "2030-01-01T00:00:00.00Z",
         "throttling": 5
     }
     try:
-        # Verifica subscriptions existentes
-        print("Verificando subscriptions existentes...")
         response = requests.get(ORION_SUBSCRIPTION_URL)
-        print(f"Resposta da verificação: {response.status_code}")
         if response.status_code == 200:
-            existing_subscriptions = response.json()
-            # Verifica se já existe uma subscription com a mesma descrição
-            if any(sub.get("description") == "Subscription para enviar dados ao Cygnus" for sub in existing_subscriptions):
-                print("Subscription já existe!")
-                return
-        # Cria a subscription
-        print("Criando nova subscription...")
-        create_response = requests.post(ORION_SUBSCRIPTION_URL, json=subscription_payload)
-        if create_response.status_code in [200, 201]:
-            print("Subscription criada com sucesso!")
-        else:
-            print(f"Erro ao criar subscription: {create_response.status_code} - {create_response.text}")
-    except Exception as e:
-        print(f"Exceção ao criar subscription: {str(e)}")
-        print(traceback.format_exc())
+            for sub in response.json():
+                if sub.get("description") == subscription_payload["description"]:
+                    print("Subscrição para o Cygnus já existe.")
+                    return
 
-# Função para enviar os dados para o Orion Context Broker
+        print("Criando nova subscrição para o Cygnus...")
+        headers = {'Content-Type': 'application/json'}
+        create_response = requests.post(ORION_SUBSCRIPTION_URL, json=subscription_payload, headers=headers)
+        if create_response.status_code == 201:
+            print("Subscrição criada com sucesso!")
+        else:
+            print(f"Erro ao criar subscrição: {create_response.status_code} - {create_response.text}")
+    except Exception as e:
+        print(f"Exceção ao criar subscrição: {e}")
+        traceback.print_exc()
+
 def send_to_orion(data):
+    """Envia os dados para o Orion, criando ou atualizando a entidade."""
     print("Enviando dados para o Orion...")
     headers = {"Content-Type": "application/json"}
+    # Usando o método PATCH que cria a entidade se ela não existir (upsert)
+    # Requer o header `?options=keyValues` para simplificar o payload
+    entity_url = f"{ORION_URL}?options=upsert"
     
-    # Tenta criar a entidade via POST
-    try:
-        print(f"Enviando POST para {ORION_URL}")
-        response = requests.post(ORION_URL, headers=headers, data=json.dumps(data))
-        print(f"Resposta do POST: {response.status_code}")
-        
-        if response.status_code == 201:
-            print("Entidade criada com sucesso no Orion.")
-        elif response.status_code == 409:
-            # Caso a entidade já exista, atualiza o atributo 'forecast' usando PATCH
-            patch_url = f"{ORION_URL}/{data['id']}/attrs"
-            patch_payload = {
-                "forecast": data["forecast"]
-            }
-            print(f"Entidade já existe. Enviando PATCH para {patch_url}")
-            patch_response = requests.patch(patch_url, headers=headers, data=json.dumps(patch_payload))
-            print(f"Resposta do PATCH: {patch_response.status_code}")
-            if patch_response.status_code in [204, 201]:
-                print("Entidade atualizada com sucesso no Orion.")
-            else:
-                print(f"Erro ao atualizar a entidade: {patch_response.status_code} - {patch_response.text}")
-        else:
-            print(f"Erro ao criar a entidade: {response.status_code} - {response.text}")
-    except Exception as e:
-        print(f"Exceção ao enviar dados para o Orion: {str(e)}")
-        print(traceback.format_exc())
+    # Payload para upsert é o corpo da entidade
+    patch_payload = {
+        "id": data["id"],
+        "type": data["type"],
+        "forecast": data["forecast"]
+    }
 
-def load_data_file():
-    print(f"Tentando carregar arquivo de dados: {DATA_FILE}")
-    retries = 0
-    while retries < MAX_RETRIES:
-        print(f"Tentativa {retries+1}/{MAX_RETRIES} de carregar o arquivo {DATA_FILE}")
-        
-        # Verifica se o arquivo de dados existe
-        if os.path.exists(DATA_FILE):
-            print(f"Arquivo {DATA_FILE} encontrado!")
-            try:
-                with open(DATA_FILE, 'r') as f:
-                    data = json.load(f)
-                print("Dados carregados com sucesso do arquivo.")
-                return data
-            except Exception as e:
-                print(f"Erro ao carregar dados do arquivo: {str(e)}")
-                print(traceback.format_exc())
+    try:
+        response = requests.post(entity_url, headers=headers, data=json.dumps(patch_payload))
+        if response.status_code in [201, 204]: # 201 (Created) ou 204 (No Content/Updated)
+             print("Entidade criada/atualizada com sucesso no Orion.")
         else:
-            print(f"Arquivo {DATA_FILE} não encontrado.")
-            
-            # Tentar outros caminhos possíveis
-            alternative_paths = [
-                "/app/data/weather_data.json",
-                "./data/weather_data.json",
-                "../data/weather_data.json",
-                "/data/weather_data.json"
-            ]
-            
-            for path in alternative_paths:
-                if path != DATA_FILE and os.path.exists(path):
-                    print(f"Arquivo encontrado em caminho alternativo: {path}")
-                    try:
-                        with open(path, 'r') as f:
-                            data = json.load(f)
-                        print(f"Dados carregados com sucesso do arquivo {path}.")
-                        return data
-                    except Exception as e:
-                        print(f"Erro ao carregar dados do arquivo {path}: {str(e)}")
-            
-            # Listar diretório atual para debug
-            try:
-                print("Diretório atual:")
-                print(os.getcwd())
-                print("Conteúdo do diretório atual:")
-                print(os.listdir("."))
-            except Exception as e:
-                print(f"Erro ao listar diretório atual: {str(e)}")
-                print(traceback.format_exc())
-        
-        retries += 1
-        
-        # Aguarda antes de tentar novamente
-        if retries < MAX_RETRIES:
-            print(f"Aguardando {RETRY_INTERVAL} segundos antes de tentar novamente...")
-            sys.stdout.flush()  # Força a saída do buffer
-            time.sleep(RETRY_INTERVAL)
-    
-    print(f"Falha ao carregar o arquivo após {MAX_RETRIES} tentativas.")
-    return None
+            print(f"Erro ao enviar dados para o Orion: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"Exceção ao enviar dados para o Orion: {e}")
+        traceback.print_exc()
 
 def main():
+    # 1. Aguarda a inicialização do Orion de forma robusta
+    if not wait_for_orion():
+        sys.exit(1) # Encerra o script se o Orion não responder
+
+    # 2. Carrega os dados (assumindo que o arquivo está no lugar certo)
     try:
-        # Aguarda a inicialização dos demais serviços
-        print("Aguardando inicialização dos serviços...")
-        sys.stdout.flush()  # Força a saída do buffer
-        time.sleep(15)
+        with open(DATA_FILE, 'r') as f:
+            data = json.load(f)
+        print("Dados carregados com sucesso do arquivo.")
+    except FileNotFoundError:
+        print(f"ERRO: Arquivo '{DATA_FILE}' não encontrado. Encerrando.")
+        sys.exit(1)
         
-        # Carrega os dados do arquivo JSON
-        data = load_data_file()
-        if data is None:
-            print("Não foi possível carregar os dados. Encerrando.")
-            return
-        
-        # Envia os dados para o Orion Context Broker
-        send_to_orion(data)
-        
-        # Cria a subscription para o Cygnus
-        print("Criando subscription para o Cygnus...")
-        create_subscription()
-        
-        print("Processo concluído. Dados meteorológicos enviados e subscription configurada.")
-        
-        # Mantém o container em execução
-        print("Mantendo o container em execução. Pressione Ctrl+C para encerrar.")
-        sys.stdout.flush()  # Força a saída do buffer
-        try:
-            while True:
-                print("Container em execução... (log a cada minuto)")
-                sys.stdout.flush()  # Força a saída do buffer
-                time.sleep(60)
-        except KeyboardInterrupt:
-            print("Container encerrado pelo usuário.")
-    except Exception as e:
-        print(f"Erro não tratado: {str(e)}")
-        print(traceback.format_exc())
+    # 3. Garante que a subscrição exista ANTES de enviar os dados
+    create_subscription()
+    
+    # 4. Envia os dados para o Orion
+    send_to_orion(data)
+    
+    print("\nProcesso concluído. O sistema está em execução e a notificação foi enviada.")
+    print("Mantendo o contêiner em execução para facilitar o debug.")
+    # Mantém o container rodando para que você possa inspecionar os logs
+    while True:
+        time.sleep(3600)
 
 if __name__ == "__main__":
-    main() 
+    main()

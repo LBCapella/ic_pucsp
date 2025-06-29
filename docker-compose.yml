@@ -7,44 +7,44 @@ services:
     container_name: orion
     ports:
       - "1026:1026"
-    command: [ "-dbURI", "mongodb://mongo:27017" ]
+    # Adiciona logLevel para mais detalhes e checagem de saúde
+    command: [ "-dbURI", "mongodb://mongo:27017", "-logLevel", "INFO" ]
     depends_on:
       - mongo
 
-  # MongoDB: banco de dados utilizado pelo Orion para persistência interna
+  # MongoDB
   mongo:
     image: mongo:4.4
     container_name: mongo
     ports:
       - "27017:27017"
 
-  # FIWARE Cygnus: responsável por captar notificações do Orion e encaminhar para o PostgreSQL
+  # FIWARE Cygnus
   cygnus:
     image: fiware/cygnus-ngsi:latest
-    # build: ./cygnus_custom
     container_name: cygnus
     ports:
       - "5055:5055"
+      - "5080:5080" # <-- Expor a porta da API de administração do Cygnus
     environment:
       - CYGNUS_POSTGRESQL_HOST=postgres
       - CYGNUS_POSTGRESQL_PORT=5432
       - CYGNUS_POSTGRESQL_USER=fiware
       - CYGNUS_POSTGRESQL_PASS=fiware
       - CYGNUS_POSTGRESQL_DATABASE=fiware
-      - CYGNUS_POSTGRESQL_ENABLE_CACHE=true
       - CYGNUS_SERVICE_PORT=5055
-      - CYGNUS_LOG_LEVEL=DEBUG
+      - CYGNUS_API_PORT=5080 # <-- Habilitar a API de admin
+      # - CYGNUS_LOG_LEVEL=DEBUG # PARA DEBUGS
+      - CYGNUS_LOG_LEVEL=INFO
       - CYGNUS_AGENT_NAME=cygnus-ngsi
       - CYGNUS_POSTGRESQL_ATTR_PERSISTENCE=row
       - CYGNUS_POSTGRESQL_DATA_MODEL=dm-by-entity
-      # # Variáveis adicionais para o script de entrada do Cygnus
-      # - CYGNUS_POSTGRESQL_USER=fiware
-      # - CYGNUS_POSTGRESQL_PASS=fiware
+      # - CYGNUS_POSTGRESQL_DATA_MODEL=dm-by-table
     depends_on:
       - orion
       - postgres
 
-  # PostgreSQL: banco de dados onde o Cygnus armazenará os dados oriundos do Orion
+  # ... (outros serviços como postgres e grafana permanecem iguais) ...
   postgres:
     image: postgres:13
     container_name: postgres
@@ -57,7 +57,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  # Grafana: ferramenta para visualização e análise dos dados armazenados no PostgreSQL
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
@@ -68,13 +67,15 @@ services:
     depends_on:
       - postgres
 
-  # Serviço Python: executa o script que carrega os dados do arquivo local e envia para o Orion
+
+  # Serviço Python
   python_script:
     build: ./python_app
     container_name: python_script
     environment:
       - ORION_URL=http://orion:1026/v2/entities
       - ORION_SUBSCRIPTION_URL=http://orion:1026/v2/subscriptions
+      - PYTHONUNBUFFERED=1 # <-- Garante que logs do Python não fiquem em buffer
     depends_on:
       - orion
       - cygnus
