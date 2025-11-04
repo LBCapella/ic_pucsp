@@ -25,7 +25,7 @@ services:
     container_name: cygnus
     ports:
       - "5055:5055"
-      - "5080:5080" # <-- Expor a porta da API de administração do Cygnus
+      - "5080:5080" # Expor a porta da API de administração do Cygnus
     environment:
       - CYGNUS_POSTGRESQL_HOST=postgres
       - CYGNUS_POSTGRESQL_PORT=5432
@@ -33,7 +33,7 @@ services:
       - CYGNUS_POSTGRESQL_PASS=fiware
       - CYGNUS_POSTGRESQL_DATABASE=fiware
       - CYGNUS_SERVICE_PORT=5055
-      - CYGNUS_API_PORT=5080 # <-- Habilitar a API de admin
+      - CYGNUS_API_PORT=5080 #  Habilita a API de admin
       # - CYGNUS_LOG_LEVEL=DEBUG # PARA DEBUGS
       - CYGNUS_LOG_LEVEL=INFO
       - CYGNUS_AGENT_NAME=cygnus-ngsi
@@ -44,7 +44,6 @@ services:
       - orion
       - postgres
 
-  # ... (outros serviços como postgres e grafana permanecem iguais) ...
   postgres:
     image: postgres:13
     container_name: postgres
@@ -75,7 +74,7 @@ services:
     environment:
       - ORION_URL=http://orion:1026/v2/entities
       - ORION_SUBSCRIPTION_URL=http://orion:1026/v2/subscriptions
-      - PYTHONUNBUFFERED=1 # <-- Garante que logs do Python não fiquem em buffer
+      - PYTHONUNBUFFERED=1 # Garante que logs do Python não fiquem em buffer
     depends_on:
       - orion
       - cygnus

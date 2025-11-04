@@ -23,7 +23,6 @@ def fetch_weather_data(city):
             forecast_days = data.get('forecast', {}).get('forecastday', [])
             print(f"Dados recebidos com sucesso. Número de dias: {len(forecast_days)}")
             
-            # A lógica de conversão dos dados permanece a mesma
             days_data = []
             for day in forecast_days:
                 day_data = {
@@ -65,17 +64,17 @@ def save_to_json(days_data, output_file):
 def main():
     print("Iniciando coleta de dados meteorológicos...")
     
-    # 1. Busca os dados da API
+    # Busca os dados da API
     days_data = fetch_weather_data(CITY)
     if days_data is None:
         print("Não foi possível coletar os dados climáticos.")
         return
         
-    # 2. Gera um nome de arquivo único usando a data e hora atuais
+    # Gera um nome de arquivo único usando a data e hora atuais
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_file = f"{OUTPUT_DIR}/weather_data_{timestamp}.json"
     
-    # 3. Salva os dados no arquivo
+    # Salva os dados no arquivo
     save_to_json(days_data, output_file)
     
     print("Processo concluído.")
